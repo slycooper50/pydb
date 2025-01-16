@@ -1,5 +1,5 @@
 vim9script
-# Plugin for MRST-Octave
+# Plugin for Python pdb
 def Echoerr(msg: string)
   echohl ErrorMsg | echom $'[termdebug] {msg}' | echohl None
 enddef
@@ -8,18 +8,18 @@ def Echowarn(msg: string)
   echohl WarningMsg | echom $'[termdebug] {msg}' | echohl None
 enddef
 
-command -nargs=* -complete=file -bang OctDb StartOctDb(<bang>0, <f-args>)
+command -nargs=* -complete=file -bang PyDb StartPypdb(<bang>0, <f-args>)
 var octproc_id: number
-var octbfnr: number
+var pybfnr: number
 var commbfnr: number
 var outbfnr: number
-var oct_win: number
+var py_win: number
 var comm_win: number
 var out_win: number
 var srcwin: number
 var brkpts: dict<any>
 var brkpts_sgns: list<number>
-var oct_bin: string
+var pybin: string
 var err: string
 var vvertical: bool
 var allleft: bool 
@@ -50,7 +50,7 @@ def InitHighlight()
 enddef
 
 def InitVars()
-	oct_bin = "octave"
+	pybin = "python"
 	vvertical = true
 	allleft = false 
 	brkpts = {}
@@ -61,13 +61,12 @@ def InitVars()
 	pcid = 14
 	stack = []
 	fname = ''
-
 enddef
 
 def CommCB(chan: channel, message: string)
 	out_msg = split(message, "\r")
 	var brkln = 0
-	if out_msg[0] =~ 'brk'
+	if out_msg[0] =~ 'Breakpoint'
 		fname = trim(matchstr(out_msg[1], '=\s*\zs.*'))
 		brkln = str2nr(split(out_msg[0], '=')[1])
 		brk_cnt += 1
@@ -121,8 +120,8 @@ enddef
 
 def SetBreakpoint(at: string)
 	var AT = empty(at) ? $"{QuoteArg(expand('<cword>'))}, {QuoteArg($"{line('.')}")}" : at
-	var cmd = $"brk = dbstop ({AT}), file =file_in_loadpath({QuoteArg(expand('<cword>') .. '.m')})\r"
-	term_sendkeys(octbfnr, cmd)
+	var cmd = $"brk = b ({AT}), file =file_in_loadpath({QuoteArg(expand('<cword>') .. '.m')})\r"
+	term_sendkeys(pybfnr, cmd)
 enddef
 
 def HandleStack(frames: list<string>)
@@ -158,14 +157,14 @@ enddef
 
 def Up(count: number)
 	var cmd = $"dbup {count}\r"
-	term_sendkeys(octbfnr, cmd)
-	term_sendkeys(octbfnr, "dbstack\r")
+	term_sendkeys(pybfnr, cmd)
+	term_sendkeys(pybfnr, "bt\r")
 enddef
 
 def Down(count: number)
 	var cmd = $"dbdown {count}\r"
-	term_sendkeys(octbfnr, cmd)
-	term_sendkeys(octbfnr, "dbstack\r")
+	term_sendkeys(pybfnr, cmd)
+	term_sendkeys(pybfnr, "bt\r")
 enddef
 
 def InstallCommands()
@@ -191,12 +190,12 @@ def InstallCommands()
 enddef
 
 def Mapping()
-	nnoremap <expr> <F9> $':call term_sendkeys({octbfnr}, "dbcont\r")<CR>'
-	nnoremap <expr> <F8> $':call term_sendkeys({octbfnr}, "dbnext\r")<CR>'
-	nnoremap <expr> <F6> $':call term_sendkeys({octbfnr}, "dbstep out\r")<CR>'
-	nnoremap <expr> <F5> $':call term_sendkeys({octbfnr}, "dbstep in\r")<CR>'
-	nnoremap <expr> <C-L> $':call term_sendkeys({octbfnr},' .. "'printf(" .. '"\033c")' .. "'" .. '.. "\r")<CR>'
-	nnoremap <expr> ,<Space> $':call term_sendkeys({octbfnr},' .. "'printf(" .. '"\033c");dbstack' .. "'" .. '.. "\r")<CR>'
+	nnoremap <expr> <F9> $':call term_sendkeys({pybfnr}, "continue\r")<CR>'
+	nnoremap <expr> <F8> $':call term_sendkeys({pybfnr}, "next\r")<CR>'
+	nnoremap <expr> <F6> $':call term_sendkeys({pybfnr}, "return\r")<CR>'
+	nnoremap <expr> <F5> $':call term_sendkeys({pybfnr}, "step\r")<CR>'
+	nnoremap <expr> <C-L> $':call term_sendkeys({pybfnr},' .. "'print(" .. '"\033c")' .. "'" .. '.. "\r")<CR>'
+	nnoremap <expr> ,<Space> $':call term_sendkeys({pybfnr},' .. "'print(" .. '"\033c");bt' .. "'" .. '.. "\r")<CR>'
   nnoremap <C-PageUp> :Up<CR>
   nnoremap <C-PageDown> :Down<CR>
 enddef
@@ -209,25 +208,26 @@ enddef
 
 ###################################################################################
 # Main function #
-def StartOctDb(bang: bool, ...octfile: list<string>)
+def StartPypdb(bang: bool, pyfile: string)
 	InitVars()
-	if !executable(oct_bin)
-		err = "Could not find Octave executable. "
+	if !executable(pybin)
+		err = "Could not find Python executable. "
+		echoe err
 		return
 	endif
 
   # Assume current window is the source code window
   srcwin = win_getid()
 
-	##################################
-	#### Create Communication PTY ####
-	commbfnr = term_start('NONE', {term_name: "Octave Communication", vertical: vvertical, callback: 'CommCB'})
+	#################################
+	### Create Communication PTY ###
+	commbfnr = term_start('NONE', {term_name: "Python Communication", vertical: vvertical, callback: 'CommCB'})
 	exe ":set nobl"
 	var commpty = job_info(term_getjob(commbfnr))['tty_out']
 	comm_win = win_getid()
-	##############################
+	#############################
 	#### Create Output Buffer ####
-	outbfnr = bufadd("Octave Output")
+	outbfnr = bufadd("Python Output")
 	bufload(outbfnr)
 	exe $'new +set\ nobl|setl\ number&|setl\ fcs=eob:\\\\x20 {bufname(outbfnr)}|set bt=nowrite'
 	out_win = win_getid()
@@ -240,21 +240,21 @@ def StartOctDb(bang: bool, ...octfile: list<string>)
       wincmd H
     endif
   endif
-	###############################
-	#### Creat Octave Terminal ####
-	octbfnr = term_start(oct_bin, {term_name: "Octave", term_finish: 'close', err_io: 'file', err_name: commpty})
-	oct_win = win_getid()
+	##############################
+	### Create Python Terminal ####
+	pybfnr = term_start(pybin .. " -m pdb " .. pyfile, {term_name: "Python", term_finish: 'close', 
+											out_io: 'file', out_name: commpty, err_io: 'file', err_name: commpty})
+	py_win = win_getid()
 	exe ":set nobl"
-	term_sendkeys(octbfnr, $"PAGER('cat > {commpty}'); page_output_immediately(1);page_screen_output(1)\r")
-	#######################################
-	#### Sign For Program Counter Line ####
-  sign_define('debugPC', {linehl: 'debugPC'})
-  # Install debugger commands in the text window.
-  win_gotoid(srcwin)
-	#######################################
-  InstallCommands()
-	Mapping()
-
+	#term_sendkeys(pybfnr, $"import sys; sys.stdout = open('{commpty}', 'w')")
+	########################################
+	##### Sign For Program Counter Line ####
+  #sign_define('debugPC', {linehl: 'debugPC'})
+  ## Install debugger commands in the text window.
+  #win_gotoid(srcwin)
+	########################################
+  #InstallCommands()
+	#Mapping()
 enddef
 
 InitHighlight()
