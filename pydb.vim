@@ -63,45 +63,15 @@ def InitVars()
 	fname = ''
 enddef
 
-def CommCB(chan: channel, message: string)
-	out_msg = split(message, "\r")
-	var brkln = 0
-	if out_msg[0] =~ 'Breakpoint'
-		fname = trim(matchstr(out_msg[1], '=\s*\zs.*'))
-		brkln = str2nr(split(out_msg[0], '=')[1])
-		brk_cnt += 1
-		var label = slice(printf('%02X', brk_cnt), 0, 2)
-		if has_key(brkpts, fname)
-			if index(brkpts[fname], brkln) == -1 
-				brkpts[fname] = add(brkpts[fname], brkln)
-			endif
-		else
-			brkpts[fname] = [brkln]
-		endif
-		if win_gotoid(srcwin)
-			if expand('%:p') != fnamemodify(fname, ':p')
-				exe $'edit {fname}'
-			endif
-			exe $":{brkln}"
-			sign_define($'dbgbrk{brkln}', {text: label, texthl: "debugBreakpoint"})
-			sign_place(0, 'Breakpoint', $'dbgbrk{brkln}', fname, {lnum: brkln})
-		endif
-	elseif out_msg[0] =~ 'stopped\s\+in\s*:'
-		HandleStack(out_msg[1 : ])
-	elseif out_msg[0] =~ 'stopped\s\+in'
-		fname = matchstr(out_msg[0], '[\zs.*\ze\]')
-		pcln = str2nr(matchstr(out_msg[0], "line\\zs\\s*\\d*"))
-		if win_gotoid(srcwin)
-			if expand('%:p') != fnamemodify(fname, ':p')
-				exe $'edit {trim(fname)}'
-			endif
-			exe $":{pcln}"
-			sign_unplace('TermDebug', {id: pcid})
-			sign_place(pcid, 'TermDebug', 'debugPC', '%', {lnum: pcln})
-		endif
-		if out_msg[1] =~ 'stopped\s\+in\s*:'
-			HandleStack(out_msg[3 : ])
-		endif
+def CommCB(chan: channel, msg: string)
+	if msg[0] =~ 'Breakpoint'
+		#HandleBreak(msg)
+	elseif msg =~ '^\s\+/'
+		HandleStack(msg)
+	elseif msg[0] =~ '>\|\s*--Call--'
+		#HandleStep(msg)
+		echom "called"
+	elseif msg =~ '\s*--Call--'
 	endif
 enddef
 
@@ -124,31 +94,73 @@ def SetBreakpoint(at: string)
 	term_sendkeys(pybfnr, cmd)
 enddef
 
-def HandleStack(frames: list<string>)
+def HandleBreak(msg: list<string>)
+	inputstr = split(msg, "\r")
+	var brkln = 0
+	fname = trim(matchstr(inputstr[1], '=\s*\zs.*'))
+	brkln = str2nr(split(inputstr[0], '=')[1])
+	brk_cnt += 1
+	var label = slice(printf('%02X', brk_cnt), 0, 2)
+	if has_key(brkpts, fname)
+		if index(brkpts[fname], brkln) == -1 
+			brkpts[fname] = add(brkpts[fname], brkln)
+		endif
+	else
+		brkpts[fname] = [brkln]
+	endif
+	if win_gotoid(srcwin)
+		if expand('%:p') != fnamemodify(fname, ':p')
+			exe $'edit {fname}'
+		endif
+		exe $":{brkln}"
+		sign_define($'dbgbrk{brkln}', {text: label, texthl: "debugBreakpoint"})
+		sign_place(0, 'Breakpoint', $'dbgbrk{brkln}', fname, {lnum: brkln})
+	endif
+enddef
+
+def HandleStep(msg: string)
+	fname = matchstr(msg, '>\zs.*\ze(\d)')
+	pcln = str2nr(matchstr(msg, "(\\zs\\s*\\d*)"))
+	if win_gotoid(srcwin)
+		if expand('%:p') != fnamemodify(fname, ':p')
+			exe $'edit {trim(fname)}'
+		endif
+		exe $":{pcln}"
+		sign_unplace('TermDebug', {id: pcid})
+		sign_place(pcid, 'TermDebug', 'debugPC', '%', {lnum: pcln})
+	endif
+	#if msg[1] =~ 'stopped\s\+in\s*:'
+	#	HandleStack(msg[3 : ])
+	#endif
+enddef
+
+def HandleStack(msg: string)
 	stack = []
 	var lines = []
+	var frames = []
+	lines = split(msg, "\r")
+	frames = filter(lines, 'v:val =~ "/"')
 	for frameln in frames
 		var frame = substitute(frameln, '[[:cntrl:]]', '', 'g')
-		var func = matchstr(frame, '\s*\zs.*\ze\s\+at')
+		var func = matchstr(frame, '(\d*)\zs.*\ze(.*)')
 		var active = 0
-		if func =~ '-->'
-			func = trim(substitute(func, '-->', '', ''), '', 0)
+		if frame =~ '>'
 			active = 1	
 		endif
-		var ln = matchstr(frame, 'line\s*\zs\d*\s*\ze[')
-		fname = matchstr(frame, '[\zs.*\ze\]')
+		var ln = matchstr(frame, '(\zs\d*\ze)')
+		fname = matchstr(frame, '/.*\ze(\d')
 		var entry = {'func': func, 'ln': ln, 'fname': fname, 'active': active}
 		if !empty(func)
 			add(stack, entry)
 		endif
 	endfor
-	echom stack
+	lines = []
 	for frame in stack
-		add(lines, frame['func'] .. repeat(' ', 4) .. frame['ln'])
+		add(lines, frame['fname'] .. repeat(' ', 4) .. frame['ln'])
 		if frame['active']
-			matchadd('curr_frame', frame['func'], 10, -1, {window: out_win})
+			matchadd('curr_frame', frame['fname'], 10, -1, {window: out_win})
 		else
-			matchadd('frame', frame['func'], 10, -1, {window: out_win})
+			matchadd('frame', frame['fname'], 10, -1, {window: out_win})
 		endif
 	endfor
 	exe $":{outbfnr}bufdo %d"
@@ -195,7 +207,7 @@ def Mapping()
 	nnoremap <expr> <F6> $':call term_sendkeys({pybfnr}, "return\r")<CR>'
 	nnoremap <expr> <F5> $':call term_sendkeys({pybfnr}, "step\r")<CR>'
 	nnoremap <expr> <C-L> $':call term_sendkeys({pybfnr},' .. "'print(" .. '"\033c")' .. "'" .. '.. "\r")<CR>'
-	nnoremap <expr> ,<Space> $':call term_sendkeys({pybfnr},' .. "'print(" .. '"\033c");bt' .. "'" .. '.. "\r")<CR>'
+	nnoremap <expr> ,<Space> $':call term_sendkeys({pybfnr},"bt" .. "\r")<CR>'
   nnoremap <C-PageUp> :Up<CR>
   nnoremap <C-PageDown> :Down<CR>
 enddef
@@ -242,19 +254,20 @@ def StartPypdb(bang: bool, pyfile: string)
   endif
 	##############################
 	### Create Python Terminal ####
-	pybfnr = term_start(pybin .. " -m pdb " .. pyfile, {term_name: "Python", term_finish: 'close', 
-											out_io: 'file', out_name: commpty, err_io: 'file', err_name: commpty})
+	pybfnr = term_start(pybin, {term_name: "Python", term_finish: 'close'})
+											#out_io: 'file', out_name: commpty, err_io: 'file', err_name: commpty})
 	py_win = win_getid()
 	exe ":set nobl"
-	#term_sendkeys(pybfnr, $"import sys; sys.stdout = open('{commpty}', 'w')")
+	term_sendkeys(pybfnr, $"import pdb; slypdb = pdb.Pdb(stdout=open('{commpty}', 'w'))\r")
+	term_sendkeys(pybfnr, $"slypdb._run(pdb._ScriptTarget('{pyfile}'))\r")
 	########################################
 	##### Sign For Program Counter Line ####
-  #sign_define('debugPC', {linehl: 'debugPC'})
-  ## Install debugger commands in the text window.
-  #win_gotoid(srcwin)
+  sign_define('debugPC', {linehl: 'debugPC'})
+  # Install debugger commands in the text window.
+  win_gotoid(srcwin)
 	########################################
-  #InstallCommands()
-	#Mapping()
+  InstallCommands()
+	Mapping()
 enddef
 
 InitHighlight()
