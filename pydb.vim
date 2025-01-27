@@ -66,12 +66,10 @@ enddef
 def CommCB(chan: channel, msg: string)
 	if msg[0] =~ 'Breakpoint'
 		#HandleBreak(msg)
-	elseif msg =~ '^\s\+/'
+	elseif (msg =~ '^\s\+/' )
 		HandleStack(msg)
-	elseif msg[0] =~ '>\|\s*--Call--'
-		#HandleStep(msg)
-		echom "called"
-	elseif msg =~ '\s*--Call--'
+	elseif (msg[0] =~ '>' || msg =~ '\s*--Call--')
+		HandleStep(msg)
 	endif
 enddef
 
@@ -119,7 +117,7 @@ def HandleBreak(msg: list<string>)
 enddef
 
 def HandleStep(msg: string)
-	fname = matchstr(msg, '>\zs.*\ze(\d)')
+	fname = matchstr(msg, '\(\s*--Call--\_.\)\?>\s*\zs.\+\ze(\d\+)')
 	pcln = str2nr(matchstr(msg, "(\\zs\\s*\\d*)"))
 	if win_gotoid(srcwin)
 		if expand('%:p') != fnamemodify(fname, ':p')
@@ -129,9 +127,7 @@ def HandleStep(msg: string)
 		sign_unplace('TermDebug', {id: pcid})
 		sign_place(pcid, 'TermDebug', 'debugPC', '%', {lnum: pcln})
 	endif
-	#if msg[1] =~ 'stopped\s\+in\s*:'
-	#	HandleStack(msg[3 : ])
-	#endif
+	#HandleStack(msg)
 enddef
 
 def HandleStack(msg: string)
@@ -144,11 +140,11 @@ def HandleStack(msg: string)
 		var frame = substitute(frameln, '[[:cntrl:]]', '', 'g')
 		var func = matchstr(frame, '(\d*)\zs.*\ze(.*)')
 		var active = 0
-		if frame =~ '>'
+		if frame =~ '>\s*/'
 			active = 1	
 		endif
 		var ln = matchstr(frame, '(\zs\d*\ze)')
-		fname = matchstr(frame, '/.*\ze(\d')
+		fname = matchstr(frame, '\s*>\?\s*\zs.*\ze(\d\+)')
 		var entry = {'func': func, 'ln': ln, 'fname': fname, 'active': active}
 		if !empty(func)
 			add(stack, entry)
@@ -163,20 +159,19 @@ def HandleStack(msg: string)
 			matchadd('frame', frame['fname'], 10, -1, {window: out_win})
 		endif
 	endfor
-	exe $":{outbfnr}bufdo %d"
+	#exe $":{outbfnr}bufdo %d"
+	deletebufline(outbfnr, 1, "$")
 	setbufline(outbfnr, 1, lines)
 enddef
 
 def Up(count: number)
-	var cmd = $"dbup {count}\r"
+	var cmd = $"up {count}\r"
 	term_sendkeys(pybfnr, cmd)
-	term_sendkeys(pybfnr, "bt\r")
 enddef
 
 def Down(count: number)
-	var cmd = $"dbdown {count}\r"
+	var cmd = $"down {count}\r"
 	term_sendkeys(pybfnr, cmd)
-	term_sendkeys(pybfnr, "bt\r")
 enddef
 
 def InstallCommands()
